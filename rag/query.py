@@ -58,6 +58,9 @@ class ScoreDocs(BaseModel):
 class StripBools(BaseModel):
     keep: bool
 
+class GradeDocs(BaseModel):
+    keep: bool
+
 
 class RewrittenQuery(BaseModel):
     rewritten_query: str
@@ -110,7 +113,7 @@ Strip: {strip}"""
     )
 ])
 
-strip_grader_llm = llm_model.with_structured_output(StripBools)
+strip_grader_llm = llm_model.with_structured_output(GradeDocs)
 strip_grader_chain = strip_grader_prompt | strip_grader_llm
 
 query_rewriter_prompt = ChatPromptTemplate.from_messages([
@@ -138,6 +141,31 @@ Rewritten Search Query:"""
 query_rewriter_llm = llm_model.with_structured_output(RewrittenQuery)
 query_rewriter_chain = query_rewriter_prompt | query_rewriter_llm
 tavily = TavilySearch(max_results=5)
+
+web_doc_grader_prompt = ChatPromptTemplate.from_messages([
+    (
+        "system",
+        """You are a biomedical web search result filter. Given a user query and a 
+web search result, decide if the result contains information relevant to answering 
+the query.
+
+Return true if the result is relevant, false if it is not.
+Be strict — only return true if the result directly relates to the query topic 
+with useful information. Generic or tangentially related pages should return false."""
+    ),
+    (
+        "human",
+        """Query: {query}
+
+Web Result:
+{web_doc}
+
+Is this result relevant?"""
+    )
+])
+
+web_doc_grader_llm = llm_model.with_structured_output(StripBools)
+web_doc_grader_chain = web_doc_grader_prompt | web_doc_grader_llm
 
 
 def Retrieval(state: RAGState) -> RAGState:
@@ -242,18 +270,11 @@ def Web_Search(state: RAGState) -> RAGState:
         text = f"TITLE: {title}\nURL: {url}\nCONTENT:\n{content}"
         web_docs.append(Document(page_content=text, metadata={"url": url, "title": title}))
 
-    strips = []
-    for doc in web_docs:
-        strip = re.split(r'(?<=[.!?])\s+', doc.page_content)
-        # Remove empty strips
-        strips += [[s.strip(), doc.metadata] for s in strip if s.strip()]
-
     relevant_strips = []
-    for strip in strips:
-        strip_content, strip_metadata = strip
-        if strip_grader_chain.invoke({"query": state["query"],
-                                      "strip": strip_content}).keep:
-            relevant_strips.append([strip_content, strip_metadata])
+    for doc in web_docs:
+        if web_doc_grader_chain.invoke({"query": query,
+                                        "web_doc": doc.page_content}).keep:
+            relevant_strips.append([doc.page_content, doc.metadata])
 
     return {"web_docs": web_docs,
             "websearch_query": websearch_query,
@@ -331,7 +352,7 @@ graph.add_edge("LLM_Generator", END)
 workflow = graph.compile()
 
 initial_state = {
-    "query": "Who is the author of Cell-Free DNA-Methylation-Based Methods and Applications in Oncology'?"}
+    "query": "What are some top paper released in 2026 on cfDNA?"}
 print(workflow.invoke(initial_state)["llm_answer"])
 
 png_bytes = workflow.get_graph().draw_mermaid_png()
