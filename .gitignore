@@ -135,8 +135,8 @@ data/chroma_db/
 # PDF papers — large files, store/share separately
 data/*.pdf
 
-# Generated workflow graph images
-*.png
+# Generated workflow graph images (keep rag/ diagram for README)
+# *.png
 
 # OS
 .DS_Store
